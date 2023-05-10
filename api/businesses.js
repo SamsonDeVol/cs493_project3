@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const { validateAgainstSchema, extractValidFields } = require('../lib/validation');
+const mysqlPool = require('../lib/mysqlPool');
 
 const businesses = require('../data/businesses');
 const { reviews } = require('./reviews');
@@ -25,32 +26,51 @@ const businessSchema = {
   email: { required: false }
 };
 
-/*
- * Route to return a list of businesses.
- */
-router.get('/', function (req, res) {
+const createBusinessTable = `
+CREATE TABLE businesses(
+  ownerid MEDIUMINT NOT NULL,
+  name VARCHAR(255) NOT NULL,
+  address VARCHAR(255) NOT NULL,
+  city VARCHAR(255) NOT NULL,
+  state VARCHAR(255) NOT NULL,
+  zip VARCHAR(255) NOT NULL,
+  phone VARCHAR(255) NOT NULL,
+  category VARCHAR(255) NOT NULL,
+  subcategory VARCHAR(255) NOT NULL,
+  website VARCHAR(255),
+  email VARCHAR(255),
+  id MEDIUMINT NOT NULL AUTO_INCREMENT,
+  PRIMARY KEY (id),
+  INDEX idx_ownerid (ownerid)
+)`
 
-  /*
-   * Compute page number based on optional query string parameter `page`.
-   * Make sure page is within allowed bounds.
-   */
-  let page = parseInt(req.query.page) || 1;
-  const numPerPage = 10;
-  const lastPage = Math.ceil(businesses.length / numPerPage);
+/*
+ * Function to return count from business table
+ */
+async function getBusinessCount() {
+  const [ count ] = await mysqlPool.query(
+      "SELECT COUNT(*) AS count FROM businesses;"
+  )
+  return count;
+}
+
+/*
+ * Function to return page of businesses
+ */
+async function getBusinessPage(page) {
+  const count = await getBusinessCount()
+  const [ businessPage ] = await mysqlPool.query(
+    "SELECT * FROM businesses;"
+  )
+  const numPerPage = 1;
+  const lastPage = Math.ceil(businessPage.length / numPerPage);
   page = page > lastPage ? lastPage : page;
   page = page < 1 ? 1 : page;
 
-  /*
-   * Calculate starting and ending indices of businesses on requested page and
-   * slice out the corresponsing sub-array of busibesses.
-   */
   const start = (page - 1) * numPerPage;
   const end = start + numPerPage;
-  const pageBusinesses = businesses.slice(start, end);
+  const pageBusinesses = businessPage.slice(start, end);
 
-  /*
-   * Generate HATEOAS links for surrounding pages.
-   */
   const links = {};
   if (page < lastPage) {
     links.nextPage = `/businesses?page=${page + 1}`;
@@ -61,34 +81,86 @@ router.get('/', function (req, res) {
     links.firstPage = '/businesses?page=1';
   }
 
-  /*
-   * Construct and send response.
-   */
-  res.status(200).json({
+  return {
     businesses: pageBusinesses,
     pageNumber: page,
     totalPages: lastPage,
     pageSize: numPerPage,
-    totalCount: businesses.length,
+    totalCount: count,
     links: links
-  });
+  }
+}
 
+async function getBusinessById(id) {
+  const query = `SELECT * FROM businesses WHERE id=${id};`
+  const [ business ] = await mysqlPool.query(query)
+  return business
+}
+
+async function insertNewBusiness(business) {
+  const validatedBusiness = extractValidFields(
+    business,
+    businessSchema
+  )
+  const [ result ] = await mysqlPool.query(
+    'INSERT INTO businesses SET ?',
+    validatedBusiness
+  );
+  return result.insertId
+}
+
+async function updateBusinessById(businessId, business) {
+  const validatedBusiness = extractValidFields(
+      business,
+      businessSchema
+  );
+  const [ result ] = await mysqlPool.query(
+      'UPDATE businesses SET ? WHERE id = ?',
+      [ validatedBusiness, businessId ]
+  );
+  return result.affectedRows > 0;
+}
+
+async function deleteBusinessById(businessId) {
+  const [ result ] = await mysqlPool.query(
+      'DELETE FROM businesses WHERE id = ?',
+      [ businessId ]
+  );
+  return result.affectedRows > 0;
+}
+
+/*
+ * Route to return a list of businesses.
+ */
+router.get('/', async (req, res) => {
+try {
+  const businessesPage = await getBusinessPage(parseInt(req.query.page) || 1);
+  res.status(200).send(businessesPage)
+} catch (err) {
+  res.status(500).json({
+    error: "Error fetching businesses list"
+  })
+}
 });
 
 /*
  * Route to create a new business.
  */
-router.post('/', function (req, res, next) {
+router.post('/', async (req, res) => {
   if (validateAgainstSchema(req.body, businessSchema)) {
-    const business = extractValidFields(req.body, businessSchema);
-    business.id = businesses.length;
-    businesses.push(business);
-    res.status(201).json({
-      id: business.id,
-      links: {
-        business: `/businesses/${business.id}`
-      }
-    });
+    try {
+      const id = await insertNewBusiness(req.body);
+      res.status(201).json({
+        id: id,
+        links: {
+          business: `/businesses/${id}`
+        }
+      });
+    } catch (err) {
+      res.status(500).json({
+        error: "Error inserting business into database"
+      });
+    }
   } else {
     res.status(400).json({
       error: "Request body is not a valid business object"
@@ -99,21 +171,11 @@ router.post('/', function (req, res, next) {
 /*
  * Route to fetch info about a specific business.
  */
-router.get('/:businessid', function (req, res, next) {
-  const businessid = parseInt(req.params.businessid);
-  if (businesses[businessid]) {
-    /*
-     * Find all reviews and photos for the specified business and create a
-     * new object containing all of the business data, including reviews and
-     * photos.
-     */
-    const business = {
-      reviews: reviews.filter(review => review && review.businessid === businessid),
-      photos: photos.filter(photo => photo && photo.businessid === businessid)
-    };
-    Object.assign(business, businesses[businessid]);
+router.get('/:businessid', async (req, res, next) => {
+  try {
+    const business = await getBusinessById(req.params.businessid);
     res.status(200).json(business);
-  } else {
+  } catch {
     next();
   }
 });
@@ -121,38 +183,47 @@ router.get('/:businessid', function (req, res, next) {
 /*
  * Route to replace data for a business.
  */
-router.put('/:businessid', function (req, res, next) {
-  const businessid = parseInt(req.params.businessid);
-  if (businesses[businessid]) {
-
-    if (validateAgainstSchema(req.body, businessSchema)) {
-      businesses[businessid] = extractValidFields(req.body, businessSchema);
-      businesses[businessid].id = businessid;
-      res.status(200).json({
-        links: {
-          business: `/businesses/${businessid}`
-        }
-      });
-    } else {
-      res.status(400).json({
-        error: "Request body is not a valid business object"
-      });
+router.put('/:businessid', async function (req, res, next) {
+  if (validateAgainstSchema(req.body, businessSchema)) {
+    try {
+      const updateSucessful = await updateBusinessById(req.params.businessid, req.body)
+      if (updateSucessful) {
+        res.status(200).send({
+          id: req.params.businessid,
+          links: {
+            business: `/businesses/${req.params.businessid}`
+          }});
+      } else {
+        next();
+      }
+    } catch (err) {
+      res.status(500).json({
+        error: "Unable to update business"
+      })
     }
-
   } else {
-    next();
+    res.status(400).json({
+      error: "Request body is not a valid business object"
+    });
   }
+  
 });
 
 /*
  * Route to delete a business.
  */
-router.delete('/:businessid', function (req, res, next) {
-  const businessid = parseInt(req.params.businessid);
-  if (businesses[businessid]) {
-    businesses[businessid] = null;
-    res.status(204).end();
-  } else {
-    next();
-  }
+router.delete('/:businessid', async function (req, res, next) {
+  try {
+    const deleteSuccessful = await deleteBusinessById(req.params.businessid);
+
+    if (deleteSuccessful) {
+            res.status(204).end();
+    } else {
+        next();
+    }
+} catch (err) {
+    res.status(500).send({
+        error: "Unable to delete business."
+    });
+}
 });

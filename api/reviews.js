@@ -1,5 +1,6 @@
 const router = require('express').Router();
 const { validateAgainstSchema, extractValidFields } = require('../lib/validation');
+const mysqlPool = require('../lib/mysqlPool');
 
 const reviews = require('../data/reviews');
 
@@ -17,40 +18,102 @@ const reviewSchema = {
   review: { required: false }
 };
 
+const createReviewTable = `
+CREATE TABLE reviews(
+  userid MEDIUMINT NOT NULL,
+  businessid MEDIUMINT NOT NULL,
+  dollars MEDIUMINT NOT NULL,
+  stars MEDIUMINT NOT NULL,
+  review VARCHAR(255),
+  id MEDIUMINT NOT NULL AUTO_INCREMENT,
+  PRIMARY KEY (id),
+  INDEX idx_businessid (businessid)
+)`
+
+async function getReviewById(id) {
+  const query = `SELECT * FROM reviews WHERE id=${id}`
+  const [ review ] = await mysqlPool.query(query)
+  return review
+}
+
+async function checkUserPreviousReview(review) {
+  const validatedReview = extractValidFields(
+    review,
+    reviewSchema
+  )
+  const [ result ] = await mysqlPool.query(
+    `SELECT COUNT(*) AS count FROM reviews WHERE userid = ? AND businessid = ?`,
+    [ validatedReview.userid, validatedReview.businessid ]
+  );
+  return result[0].count
+}
+
+async function insertNewReview(review) {
+  const validatedReview = extractValidFields(
+    review,
+    reviewSchema
+  )
+  const [ result ] = await mysqlPool.query(
+    'INSERT INTO reviews SET ?',
+    validatedReview
+  );
+  return result.insertId
+}
+
+async function updateReviewById(id, review) {
+  const validatedReview = extractValidFields(
+    review,
+    reviewSchema
+  )
+  const [ result ] = await mysqlPool.query(
+    'UPDATE reviews SET ? WHERE id = ?',
+    [ validatedReview, id ]
+  )
+  return result.affectedRows > 0;
+}
+
+async function deleteReviewById(id) {
+  const [ result ] = await mysqlPool.query(
+    'DELETE FROM reviews WHERE id = ?',
+    [ id ]
+  )
+  return result.affectedRows > 0;
+}
 
 /*
  * Route to create a new review.
  */
-router.post('/', function (req, res, next) {
+router.post('/', async function (req, res, next) {
   if (validateAgainstSchema(req.body, reviewSchema)) {
 
     const review = extractValidFields(req.body, reviewSchema);
-
-    /*
-     * Make sure the user is not trying to review the same business twice.
-     */
-    const userReviewedThisBusinessAlready = reviews.some(
-      existingReview => existingReview
-        && existingReview.ownerid === review.ownerid
-        && existingReview.businessid === review.businessid
-    );
-
-    if (userReviewedThisBusinessAlready) {
-      res.status(403).json({
-        error: "User has already posted a review of this business"
-      });
-    } else {
-      review.id = reviews.length;
-      reviews.push(review);
-      res.status(201).json({
-        id: review.id,
-        links: {
-          review: `/reviews/${review.id}`,
-          business: `/businesses/${review.businessid}`
+    try {
+      const userReviewedThisBusinessAlready = await checkUserPreviousReview(req.body)
+      if (userReviewedThisBusinessAlready > 0) {
+        res.status(403).json({
+          error: "User has already posted a review of this business"
+        });
+      } else {
+        try {
+          const id = await insertNewReview(review);
+          res.status(201).json({
+            id: id,
+            links: {
+              review: `/reviews/${id}`,
+              business: `/businesses/${review.businessid}`
+            }
+          });
+        } catch (err) {
+          res.status(500).json({
+            error: "Error inserting review into database"
+          });
         }
-      });
+      }
+    } catch (err) {
+        res.status(500).json({
+          error: "Error validating user review history"
+        });
     }
-
   } else {
     res.status(400).json({
       error: "Request body is not a valid review object"
@@ -61,11 +124,11 @@ router.post('/', function (req, res, next) {
 /*
  * Route to fetch info about a specific review.
  */
-router.get('/:reviewID', function (req, res, next) {
-  const reviewID = parseInt(req.params.reviewID);
-  if (reviews[reviewID]) {
-    res.status(200).json(reviews[reviewID]);
-  } else {
+router.get('/:reviewID', async function (req, res, next) {
+  try {
+    const review = await getReviewById(req.params.reviewID);
+    res.status(200).json(review);
+  } catch {
     next();
   }
 });
@@ -73,38 +136,33 @@ router.get('/:reviewID', function (req, res, next) {
 /*
  * Route to update a review.
  */
-router.put('/:reviewID', function (req, res, next) {
+router.put('/:reviewID', async function (req, res, next) {
   const reviewID = parseInt(req.params.reviewID);
-  if (reviews[reviewID]) {
-
+  try {
     if (validateAgainstSchema(req.body, reviewSchema)) {
-      /*
-       * Make sure the updated review has the same businessid and userid as
-       * the existing review.
-       */
-      let updatedReview = extractValidFields(req.body, reviewSchema);
-      let existingReview = reviews[reviewID];
-      if (updatedReview.businessid === existingReview.businessid && updatedReview.userid === existingReview.userid) {
-        reviews[reviewID] = updatedReview;
-        reviews[reviewID].id = reviewID;
-        res.status(200).json({
-          links: {
-            review: `/reviews/${reviewID}`,
-            business: `/businesses/${updatedReview.businessid}`
-          }
-        });
-      } else {
-        res.status(403).json({
-          error: "Updated review cannot modify businessid or userid"
-        });
+      try {
+        const updateSuccesful = await updateReviewById(reviewID, req.body)
+        if (updateSuccesful) {
+          res.status(200).send({
+            id: reviewID,
+            links: {
+              review: `/reviews/${reviewID}`
+            }
+          });
+        } else {
+          next();
+        }
+      } catch (err) {
+        res.status(500).json({
+          error: "Unable to update review"
+        })
       }
     } else {
       res.status(400).json({
         error: "Request body is not a valid review object"
       });
     }
-
-  } else {
+  } catch {
     next();
   }
 });
@@ -112,12 +170,17 @@ router.put('/:reviewID', function (req, res, next) {
 /*
  * Route to delete a review.
  */
-router.delete('/:reviewID', function (req, res, next) {
-  const reviewID = parseInt(req.params.reviewID);
-  if (reviews[reviewID]) {
-    reviews[reviewID] = null;
-    res.status(204).end();
-  } else {
-    next();
+router.delete('/:reviewID', async function (req, res, next) {
+  try {
+    const deleteSuccessful = await deleteReviewById(req.params.reviewID)
+    if (deleteSuccessful) {
+      res.status(204).end();
+    } else { 
+      next();
+    }
+  } catch (err) {
+    res.status(500).send({
+      error: "Unable to delete review"
+    })
   }
 });
