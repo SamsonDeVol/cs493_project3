@@ -16,16 +16,19 @@ const photoSchema = {
   caption: { required: false }
 };
 
-const createPhotoTable = `
-CREATE TABLE photos(
-  userid MEDIUMINT NOT NULL, 
-  businessid MEDIUMINT NOT NULL,
-  caption VARCHAR(255),
-  id MEDIUMINT NOT NULL AUTO_INCREMENT,
-  PRIMARY KEY (id),
-  INDEX idx_userid (userid),
-  INDEX idx_businessid (businessid)
-)`
+async function createPhotosTable() {
+  await mysqlPool.query(
+    `CREATE TABLE photos(
+      userid MEDIUMINT NOT NULL, 
+      businessid MEDIUMINT NOT NULL,
+      caption VARCHAR(255),
+      id MEDIUMINT NOT NULL AUTO_INCREMENT,
+      PRIMARY KEY (id),
+      INDEX idx_userid (userid),
+      INDEX idx_businessid (businessid)
+    )`
+  )
+}
 
 async function insertNewPhoto(photo) {
   const validatedPhoto = extractValidFields(
@@ -64,6 +67,18 @@ async function deletePhotoById(id) {
   )
   return result.affectedRows > 0;
 }
+
+router.post('/createPhotosTable', async (req, res) => {
+  try {
+    await createPhotosTable();
+    res.status(200).send({})
+  } catch (err) {
+    res.status(500).json({
+      error: "Error creating photos table"
+    })
+  }
+});
+
 
 /*
  * Route to create a new photo.

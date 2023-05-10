@@ -26,23 +26,26 @@ const businessSchema = {
   email: { required: false }
 };
 
-const createBusinessTable = `
-CREATE TABLE businesses(
-  ownerid MEDIUMINT NOT NULL,
-  name VARCHAR(255) NOT NULL,
-  address VARCHAR(255) NOT NULL,
-  city VARCHAR(255) NOT NULL,
-  state VARCHAR(255) NOT NULL,
-  zip VARCHAR(255) NOT NULL,
-  phone VARCHAR(255) NOT NULL,
-  category VARCHAR(255) NOT NULL,
-  subcategory VARCHAR(255) NOT NULL,
-  website VARCHAR(255),
-  email VARCHAR(255),
-  id MEDIUMINT NOT NULL AUTO_INCREMENT,
-  PRIMARY KEY (id),
-  INDEX idx_ownerid (ownerid)
-)`
+async function createBusinessesTable() {
+  await mysqlPool.query(`
+    CREATE TABLE businesses(
+      ownerid MEDIUMINT NOT NULL,
+      name VARCHAR(255) NOT NULL,
+      address VARCHAR(255) NOT NULL,
+      city VARCHAR(255) NOT NULL,
+      state VARCHAR(255) NOT NULL,
+      zip VARCHAR(255) NOT NULL,
+      phone VARCHAR(255) NOT NULL,
+      category VARCHAR(255) NOT NULL,
+      subcategory VARCHAR(255) NOT NULL,
+      website VARCHAR(255),
+      email VARCHAR(255),
+      id MEDIUMINT NOT NULL AUTO_INCREMENT,
+      PRIMARY KEY (id),
+      INDEX idx_ownerid (ownerid)
+    )`
+  )
+}
 
 /*
  * Function to return count from business table
@@ -129,6 +132,17 @@ async function deleteBusinessById(businessId) {
   return result.affectedRows > 0;
 }
 
+router.post('/createBusinessesTable', async (req, res) => {
+  try {
+    await createBusinessesTable();
+    res.status(200).send({})
+  } catch (err) {
+    res.status(500).json({
+      error: "Error creating businesses table"
+    })
+  }
+});
+
 /*
  * Route to return a list of businesses.
  */
@@ -157,8 +171,9 @@ router.post('/', async (req, res) => {
         }
       });
     } catch (err) {
+      console.log("err", err)
       res.status(500).json({
-        error: "Error inserting business into database"
+        error: `Error inserting business into database ${err}`
       });
     }
   } else {

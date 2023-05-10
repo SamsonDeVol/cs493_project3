@@ -18,17 +18,20 @@ const reviewSchema = {
   review: { required: false }
 };
 
-const createReviewTable = `
-CREATE TABLE reviews(
-  userid MEDIUMINT NOT NULL,
-  businessid MEDIUMINT NOT NULL,
-  dollars MEDIUMINT NOT NULL,
-  stars MEDIUMINT NOT NULL,
-  review VARCHAR(255),
-  id MEDIUMINT NOT NULL AUTO_INCREMENT,
-  PRIMARY KEY (id),
-  INDEX idx_businessid (businessid)
-)`
+async function createReviewsTable() { 
+  await mysqlPool.query(`
+    CREATE TABLE reviews(
+      userid MEDIUMINT NOT NULL,
+      businessid MEDIUMINT NOT NULL,
+      dollars MEDIUMINT NOT NULL,
+      stars MEDIUMINT NOT NULL,
+      review VARCHAR(255),
+      id MEDIUMINT NOT NULL AUTO_INCREMENT,
+      PRIMARY KEY (id),
+      INDEX idx_businessid (businessid)
+    )`
+  )
+}
 
 async function getReviewById(id) {
   const query = `SELECT * FROM reviews WHERE id=${id}`
@@ -79,6 +82,18 @@ async function deleteReviewById(id) {
   )
   return result.affectedRows > 0;
 }
+
+router.post('/createReviewsTable', async (req, res) => {
+  try {
+    await createReviewsTable();
+    res.status(200).send({})
+  } catch (err) {
+    res.status(500).json({
+      error: "Error creating reviews table"
+    })
+  }
+});
+
 
 /*
  * Route to create a new review.
