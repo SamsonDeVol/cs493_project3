@@ -2,7 +2,7 @@ const router = require('express').Router();
 const { validateAgainstSchema, extractValidFields } = require('../lib/validation');
 const mysqlPool = require('../lib/mysqlPool');
 const bcrypt = require("bcryptjs")
-const {generateAuthToken } = require('../lib/auth')
+const { requireAuthentication, generateAuthToken } = require('../lib/auth')
 exports.router = router;
 
 const { businesses } = require('./businesses');
@@ -28,8 +28,6 @@ async function createUsersTable() {
       PRIMARY KEY (id)
     )`
   )
-
-  console.log("res: ", result)
 }
 
 async function insertNewUser(user) {
@@ -40,20 +38,16 @@ async function insertNewUser(user) {
 
   // hash/salt password
   const hash = await bcrypt.hash(validatedUser.password, 8)
-  console.log("hash", hash);
   validatedUser.password = hash
 
-  console.log("inserting user", user)
   const [ result ] = await mysqlPool.query(
     'INSERT INTO users SET ?',
     validatedUser
   );
-  console.log("res", result)
   return result.insertId
 }
 
 async function getUserById(userID, includePassword) {
-  console.log("user id", userID)
   const [ result ] = await mysqlPool.query(
     `SELECT * FROM users WHERE id=${userID};`
   )
@@ -65,12 +59,8 @@ async function getUserById(userID, includePassword) {
 }
 
 async function validateUser(userID, password){
-  console.log("id", userID, "pass", password)
-  
   const [ user ] = await getUserById(userID, true)
-  console.log("user", user)
   const authenticated = user && await bcrypt.compare(password, user.password);
-  console.log("auth", authenticated)
   return authenticated;
 }
 
@@ -105,12 +95,18 @@ router.post('/', async (req,res) => {
   }
 })
 
-router.get('/:userid', async (req, res) => {
+router.get('/:userid', requireAuthentication, async (req, res) => {
   const userid = parseInt(req.params.userid);
   const result = await getUserById(userid, false)
-  res.status(200).json({
-    result
-  })
+  if (req.user != req.params.userid) {
+    res.status(403).json({
+      error: "Unauthorized to access the specified resource"
+    });
+  } else {
+    res.status(200).json({
+      result
+    })
+  }
 })
 
 router.post('/login', async (req, res) => {
