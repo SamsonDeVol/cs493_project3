@@ -58,6 +58,26 @@ async function getUserById(userID, includePassword) {
   return result
 }
 
+async function getUserBusinessesById(userID) {
+  const [ result ] = await mysqlPool.query(
+    `SELECT * FROM businesses WHERE ownerid=${userID}`
+  )
+  return result
+}
+
+async function getUserReviewsById(userID) {
+  const [ result ] = await mysqlPool.query(
+    `SELECT * FROM reviews WHERE userid=${userID}`
+  )
+  return result
+}
+async function getUserPhotosById(userID) {
+  const [ result ] = await mysqlPool.query(
+    `SELECT * FROM photos WHERE userid=${userID}`
+  )
+  return result
+}
+
 async function validateUser(userID, password){
   const [ user ] = await getUserById(userID, true)
   const authenticated = user && await bcrypt.compare(password, user.password);
@@ -135,32 +155,57 @@ router.post('/login', async (req, res) => {
 /*
  * Route to list all of a user's businesses.
  */
-router.get('/:userid/businesses', function (req, res) {
+router.get('/:userid/businesses', requireAuthentication, async (req, res) => {
+  // const userid = parseInt(req.params.userid);
+
+  // const userBusinesses = businesses.filter(business => business && business.ownerid === userid);
+  // res.status(200).json({
+  //   businesses: userBusinesses
+  // });
+
   const userid = parseInt(req.params.userid);
-  const userBusinesses = businesses.filter(business => business && business.ownerid === userid);
-  res.status(200).json({
-    businesses: userBusinesses
-  });
+  const userBusinesses = await getUserBusinessesById(userid)
+  if (req.user != req.params.userid) {
+    res.status(403).json({
+      error: "Unauthorized to access the specified resource"
+    });
+  } else {
+    res.status(200).json({
+      userBusinesses
+    })
+  }
 });
 
 /*
  * Route to list all of a user's reviews.
  */
-router.get('/:userid/reviews', function (req, res) {
+router.get('/:userid/reviews', requireAuthentication, async (req, res) => {
   const userid = parseInt(req.params.userid);
-  const userReviews = reviews.filter(review => review && review.userid === userid);
-  res.status(200).json({
-    reviews: userReviews
-  });
+  const userReviews = await getUserReviewsById(userid)
+  if (req.user != req.params.userid) {
+    res.status(403).json({
+      error: "Unauthorized to access the specified resource"
+    });
+  } else {
+    res.status(200).json({
+      userReviews
+    })
+  }
 });
 
 /*
  * Route to list all of a user's photos.
  */
-router.get('/:userid/photos', function (req, res) {
+router.get('/:userid/photos', requireAuthentication, async (req, res) => {
   const userid = parseInt(req.params.userid);
-  const userPhotos = photos.filter(photo => photo && photo.userid === userid);
-  res.status(200).json({
-    photos: userPhotos
-  });
+  const userPhotos = await getUserPhotosById(userid)
+  if (req.user != req.params.userid) {
+    res.status(403).json({
+      error: "Unauthorized to access the specified resource"
+    });
+  } else {
+    res.status(200).json({
+      userPhotos
+    })
+  }
 });
